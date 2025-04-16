@@ -57,7 +57,7 @@ Or you can download one of the `standalone executable` versions. *(You can click
 
 # Changelogs
 
-v2.0.4 (Proposed)
+v2.0.4
 
 - **Changed default search to LibGen Fiction section.**
 - **Added `--scitech` flag to search the Sci-Tech (non-fiction) section.**
