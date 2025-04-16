@@ -1,17 +1,21 @@
 {
-  "latest_version": "2.0.3",
+  "latest_version": "2.0.4", // Or the current latest version
   "mirrors": [
-    "https://libgen.is/",
-    "https://libgen.st/",
-    "http://libgen.rs/"
+    "http://libgen.is",
+    "http://libgen.rs",
+    "http://libgen.st"
+    // Add other known working mirrors if desired
   ],
-  "searchReqPattern": "{mirror}search.php?&req={query}&page={pageNumber}&res={pageSize}&sort_mode=ASC",
-  "searchByMD5Pattern": "{mirror}search.php?req={md5}&column=md5",
-  "MD5ReqPattern": "{mirror}json.php?ids={id}&fields=md5",
+  "searchReqPattern": "{mirror}/search.php?req={query}&lg_topic=libgen&open=0&view=simple&res={pageSize}&phrase=1&column=def&page={pageNumber}",
+  // --- THIS LINE IS LIKELY MISSING ---
+  "fictionSearchReqPattern": "{mirror}/fiction/?q={query}",
+  // ------------------------------------
+  "searchByMD5Pattern": "{mirror}/search.php?req={md5}&column=md5",
+  "MD5ReqPattern": "{mirror}/json.php?ids={id}&fields=md5",
   "columnFilterQueryParamKey": "column",
   "columnFilterQueryParamValues": {
     "Title": "title",
-    "Author(s)": "author",
+    "Author": "author",
     "Series": "series",
     "Publisher": "publisher",
     "Year": "year",
