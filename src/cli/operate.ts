@@ -7,7 +7,7 @@ import renderTUI from "../tui/index";
 import { LAYOUT_KEY } from "../tui/layouts/keys";
 import { useBoundStore } from "../tui/store/index";
 import { attempt } from "../utils";
-import { SEARCH_MIN_CHAR } from "../constants";
+import { SEARCH_MIN_CHAR } from "../../constants";
 
 // Helper to ensure config is loaded
 async function ensureConfigLoaded() {
@@ -99,7 +99,6 @@ export const operate = async (flags: Record<string, unknown>) => {
 
     console.log("Finding download url for MD5:", md5);
     // MD5 lookup usually redirects to the book page, which might be Sci-Tech or Fiction style
-    // Let's try the Sci-Tech pattern first, as it's more common for direct MD5 lookups on LibGen main sites
     // The `searchByMD5Pattern` should point to a URL that works regardless of original section, if possible.
     const md5SearchUrl = constructMD5SearchUrl(store.searchByMD5Pattern, store.mirror, md5);
 
@@ -115,19 +114,22 @@ export const operate = async (flags: Record<string, unknown>) => {
         entry = parseFictionEntries(searchPageDocument)?.[0];
     }
 
+    // Check if entry or entry.mirror is valid before proceeding
     if (!entry || !entry.mirror) {
-        // Sometimes the MD5 search URL itself IS the mirror page if only one result
         console.log("Could not parse standard entry format, attempting direct mirror check...");
+        // Sometimes the MD5 search URL itself IS the mirror page if only one result
         const directDownloadUrl = findDownloadUrlFromMirror(searchPageDocument); // Try parsing current page
         if (directDownloadUrl) {
              console.log("Found direct download link:", directDownloadUrl);
-             return;
+             return; // Success!
         }
-        console.log(`Failed to parse entry or find mirror link for MD5 ${md5}.`);
-        return;
+        // If direct parsing also fails
+        console.log(`Failed to parse entry details or find mirror link for MD5 ${md5}.`);
+        return; // Failure
     }
 
-    console.log(`Found entry: "${entry.title}", accessing mirror page...`);
+    // If entry and mirror link were found
+    console.log(`Found entry: "${entry.title}", accessing mirror page: ${entry.mirror}`);
     const mirrorPageDocument = await attempt(() => getDocument(entry.mirror));
     if (!mirrorPageDocument) {
       console.log(`Failed to get mirror page document from ${entry.mirror}`);
