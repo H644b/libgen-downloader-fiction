@@ -1,15 +1,12 @@
 {
-  "latest_version": "2.0.4", // Or the current latest version
+  "latest_version": "2.0.3",
   "mirrors": [
     "http://libgen.is",
     "http://libgen.rs",
     "http://libgen.st"
-    // Add other known working mirrors if desired
   ],
   "searchReqPattern": "{mirror}/search.php?req={query}&lg_topic=libgen&open=0&view=simple&res={pageSize}&phrase=1&column=def&page={pageNumber}",
-  // --- THIS LINE IS LIKELY MISSING ---
   "fictionSearchReqPattern": "{mirror}/fiction/?q={query}",
-  // ------------------------------------
   "searchByMD5Pattern": "{mirror}/search.php?req={md5}&column=md5",
   "MD5ReqPattern": "{mirror}/json.php?ids={id}&fields=md5",
   "columnFilterQueryParamKey": "column",
