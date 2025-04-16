@@ -114,7 +114,4 @@ v1.0
 - Improved error handling.
 - When a connection error occurs, `libgen-downloader` does not shut down instantly. It tries 5 times to do same request with 3 seconds of delay.
 - New customized UI module.
-```
---- END OF FILE `libgen-downloader-master/README.md` ---
 
-Remember to also update the `config.json` on the `configuration` branch as shown in the previous step, and thoroughly test the fiction parsing (`parseFictionEntries` and `FICTION_RESULTS_TABLE_SELECTOR`) against the live LibGen fiction search results page.
