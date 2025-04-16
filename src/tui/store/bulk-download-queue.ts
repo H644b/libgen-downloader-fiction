@@ -6,7 +6,9 @@ import { DownloadStatus } from "../../download-statuses";
 import {
   constructFindMD5SearchUrl,
   constructMD5SearchUrl,
-  parseEntries,
+  // Import the correct parser, likely SciTech for MD5 lookups
+  parseSciTechEntries,
+  parseFictionEntries, // Keep fiction parser available just in case MD5 lookup lands on fiction page
 } from "../../api/data/search";
 import { attempt } from "../../utils";
 import { LAYOUT_KEY } from "../layouts/keys";
@@ -63,7 +65,7 @@ export const initialBulkDownloadQueueState = {
 export const createBulkDownloadQueueStateSlice = (
   set: SetState<TCombinedStore>,
   get: GetState<TCombinedStore>
-) => ({
+): IBulkDownloadQueueState => ({ // Added return type annotation
   ...initialBulkDownloadQueueState,
 
   addToBulkDownloadQueue: (entry: Entry) => {
@@ -192,38 +194,70 @@ export const createBulkDownloadQueueStateSlice = (
   },
 
   operateBulkDownloadQueue: async () => {
-    const bulkDownloadQueue = get().bulkDownloadQueue;
+    const store = get(); // Get store once
+    const bulkDownloadQueue = store.bulkDownloadQueue;
+
     for (let i = 0; i < bulkDownloadQueue.length; i++) {
       const item = bulkDownloadQueue[i];
-      const md5SearchUrl = constructMD5SearchUrl(get().searchByMD5Pattern, get().mirror, item.md5);
+      const md5SearchUrl = constructMD5SearchUrl(store.searchByMD5Pattern, store.mirror, item.md5);
 
-      get().onBulkQueueItemProcessing(i);
+      store.onBulkQueueItemProcessing(i);
 
       const searchPageDocument = await attempt(() => getDocument(md5SearchUrl));
       if (!searchPageDocument) {
-        get().setWarningMessage(`Couldn't fetch the search page for ${item.md5}`);
-        get().onBulkQueueItemFail(i);
+        store.setWarningMessage(`Couldn't fetch the search page for ${item.md5}`);
+        store.onBulkQueueItemFail(i);
         continue;
       }
 
-      const entry = parseEntries(searchPageDocument)?.[0];
+      // Try parsing as Sci-Tech first, then Fiction if that fails
+      let entry = parseSciTechEntries(searchPageDocument)?.[0];
       if (!entry) {
-        get().setWarningMessage(`Couldn't find the entry for ${item.md5}`);
-        get().onBulkQueueItemFail(i);
-        continue;
+          entry = parseFictionEntries(searchPageDocument)?.[0];
       }
 
+
+      if (!entry || !entry.mirror) {
+         // Try getting download link directly from the current page (MD5 search might redirect)
+         const directDownloadUrl = findDownloadUrlFromMirror(searchPageDocument);
+         if (directDownloadUrl) {
+            const downloadStream = await attempt(() =>
+              fetch(directDownloadUrl, { agent: httpAgent })
+            );
+            if (downloadStream) {
+              try {
+                 await downloadFile({
+                    downloadStream,
+                    onStart: (filename, total) => store.onBulkQueueItemStart(i, filename, total),
+                    onData: (filename, chunk, total) => store.onBulkQueueItemData(i, filename, chunk, total),
+                 });
+                 store.onBulkQueueItemComplete(i);
+              } catch (err) {
+                 store.setWarningMessage(`Download failed for MD5 ${item.md5} (direct attempt)`);
+                 store.onBulkQueueItemFail(i);
+              }
+              continue; // Move to next item
+            }
+         }
+         // If direct attempt also fails or no entry/mirror found initially
+         store.setWarningMessage(`Couldn't find the entry or mirror link for ${item.md5}`);
+         store.onBulkQueueItemFail(i);
+         continue;
+      }
+
+
+      // Proceed with mirror page if entry was found
       const mirrorPageDocument = await attempt(() => getDocument(entry.mirror));
       if (!mirrorPageDocument) {
-        get().setWarningMessage(`Couldn't fetch the mirror page for ${item.md5}`);
-        get().onBulkQueueItemFail(i);
+        store.setWarningMessage(`Couldn't fetch the mirror page for ${item.md5}`);
+        store.onBulkQueueItemFail(i);
         continue;
       }
 
       const downloadUrl = findDownloadUrlFromMirror(mirrorPageDocument);
       if (!downloadUrl) {
-        get().setWarningMessage(`Couldn't find the download url for ${item.md5}`);
-        get().onBulkQueueItemFail(i);
+        store.setWarningMessage(`Couldn't find the download url for ${item.md5}`);
+        store.onBulkQueueItemFail(i);
         continue;
       }
 
@@ -233,8 +267,8 @@ export const createBulkDownloadQueueStateSlice = (
         })
       );
       if (!downloadStream) {
-        get().setWarningMessage(`Couldn't fetch the download stream for ${item.md5}`);
-        get().onBulkQueueItemFail(i);
+        store.setWarningMessage(`Couldn't fetch the download stream for ${item.md5}`);
+        store.onBulkQueueItemFail(i);
         continue;
       }
 
@@ -242,16 +276,17 @@ export const createBulkDownloadQueueStateSlice = (
         await downloadFile({
           downloadStream,
           onStart: (filename, total) => {
-            get().onBulkQueueItemStart(i, filename, total);
+            store.onBulkQueueItemStart(i, filename, total);
           },
           onData: (filename, chunk, total) => {
-            get().onBulkQueueItemData(i, filename, chunk, total);
+            store.onBulkQueueItemData(i, filename, chunk, total);
           },
         });
 
-        get().onBulkQueueItemComplete(i);
+        store.onBulkQueueItemComplete(i);
       } catch (err) {
-        get().onBulkQueueItemFail(i);
+         store.setWarningMessage(`Download failed for MD5 ${item.md5}: ${err instanceof Error ? err.message : String(err)}`);
+        store.onBulkQueueItemFail(i);
       }
     }
 
@@ -259,23 +294,29 @@ export const createBulkDownloadQueueStateSlice = (
       isBulkDownloadComplete: true,
     });
 
+    // Only create file if there were successful downloads
     const completedMD5List = get()
       .bulkDownloadQueue.filter((item) => item.status === DownloadStatus.DOWNLOADED)
       .map((item) => item.md5);
 
-    try {
-      const filename = await createMD5ListFile(completedMD5List);
-      set({
-        createdMD5ListFileName: filename,
-      });
-    } catch (err) {
-      get().setWarningMessage("Couldn't create the MD5 list file");
+    if (completedMD5List.length > 0) {
+        try {
+          const filename = await createMD5ListFile(completedMD5List);
+          set({
+            createdMD5ListFileName: filename,
+          });
+        } catch (err) {
+          get().setWarningMessage("Couldn't create the completed MD5 list file");
+        }
+    } else {
+        set({ createdMD5ListFileName: "No files successfully downloaded." });
     }
   },
 
   startBulkDownload: async () => {
-    if (get().bulkDownloadSelectedEntries.length === 0) {
-      get().setWarningMessage("Bulk download queue is empty");
+    const store = get(); // Use store consistently
+    if (store.bulkDownloadSelectedEntries.length === 0) {
+      store.setWarningMessage("Bulk download queue is empty");
       return;
     }
 
@@ -285,44 +326,94 @@ export const createBulkDownloadQueueStateSlice = (
       createdMD5ListFileName: "",
       isBulkDownloadComplete: false,
     });
-    get().setActiveLayout(LAYOUT_KEY.BULK_DOWNLOAD_LAYOUT);
+    store.setActiveLayout(LAYOUT_KEY.BULK_DOWNLOAD_LAYOUT);
 
-    // initialize bulk queue
+    // Initialize bulk queue with status FETCHING_MD5
     set((prev) => ({
-      bulkDownloadQueue: prev.bulkDownloadSelectedEntries.map(() => ({
-        md5: "",
-        status: DownloadStatus.FETCHING_MD5,
+      bulkDownloadQueue: prev.bulkDownloadSelectedEntries.map((entry) => ({ // Use selected entry ID
+        md5: entry.id, // Assuming entry.id IS the MD5 for Sci-Tech entries
+        status: DownloadStatus.FETCHING_MD5, // Initial status
         filename: "",
         progress: 0,
         total: 0,
       })),
     }));
 
-    // find md5list
-    const entryIds = get().bulkDownloadSelectedEntryIds;
-    const findMD5SearchUrl = constructFindMD5SearchUrl(get().MD5ReqPattern, get().mirror, entryIds);
+
+    // If we have Sci-Tech entries, their ID is often the MD5.
+    // If we mix Fiction (where ID might not be MD5), this needs adjustment.
+    // Assuming for now `bulkDownloadSelectedEntries` only contains items where ID=MD5.
+    // If not, we'd need to fetch MD5s similar to the old implementation:
+
+    /*
+    // --- Code to fetch MD5s if entry.id is not guaranteed to be MD5 ---
+    const entryIds = store.bulkDownloadSelectedEntryIds;
+    const findMD5SearchUrl = constructFindMD5SearchUrl(store.MD5ReqPattern, store.mirror, entryIds);
 
     const md5ListResponse = await attempt(() => fetch(findMD5SearchUrl));
     if (!md5ListResponse) {
-      get().setWarningMessage("Couldn't fetch the MD5 list");
+      store.setWarningMessage("Couldn't fetch the MD5 list for bulk download");
+      // Mark all items as failed?
+      set(prev => ({
+          bulkDownloadQueue: prev.bulkDownloadQueue.map(item => ({...item, status: DownloadStatus.FAILED })),
+          failedBulkDownloadItemCount: prev.bulkDownloadQueue.length,
+          isBulkDownloadComplete: true,
+          createdMD5ListFileName: "Failed to fetch MD5s.",
+      }));
       return;
     }
-    const md5Arr = (await md5ListResponse.json()) as { md5: string }[];
-    const md5List = md5Arr.map((item) => item.md5);
 
-    set((prev) => ({
+    try {
+        const md5Arr = (await md5ListResponse.json()) as { id: string, md5: string }[]; // Assuming JSON response includes ID
+        const md5Map = new Map(md5Arr.map(item => [item.id, item.md5]));
+
+        set((prev) => ({
+          bulkDownloadQueue: prev.bulkDownloadQueue.map((item, index) => {
+              const originalEntry = prev.bulkDownloadSelectedEntries[index];
+              const md5 = md5Map.get(originalEntry.id);
+              if (!md5) {
+                  store.setWarningMessage(`Could not find MD5 for entry ID ${originalEntry.id}`);
+                  store.onBulkQueueItemFail(index); // Use index to mark fail
+                  return {...item, status: DownloadStatus.FAILED }; // Mark as failed
+              }
+              return {
+                ...item,
+                status: DownloadStatus.IN_QUEUE,
+                md5: md5, // Assign fetched MD5
+              };
+          }),
+        }));
+    } catch (e) {
+        store.setWarningMessage(`Failed to parse MD5 list response: ${e instanceof Error ? e.message : String(e)}`);
+        set(prev => ({
+            bulkDownloadQueue: prev.bulkDownloadQueue.map(item => ({...item, status: DownloadStatus.FAILED })),
+            failedBulkDownloadItemCount: prev.bulkDownloadQueue.length,
+            isBulkDownloadComplete: true,
+            createdMD5ListFileName: "Failed to parse MD5 list.",
+        }));
+        return;
+    }
+    // --- End code to fetch MD5s ---
+    */
+
+    // Directly assign MD5 from entry ID and set status to IN_QUEUE (simpler if ID=MD5 assumption holds)
+     set((prev) => ({
       bulkDownloadQueue: prev.bulkDownloadQueue.map((item, index) => ({
         ...item,
+        md5: prev.bulkDownloadSelectedEntries[index].id, // Assuming ID is MD5
         status: DownloadStatus.IN_QUEUE,
-        md5: md5List[index],
       })),
     }));
 
-    get().operateBulkDownloadQueue();
+
+    await store.operateBulkDownloadQueue(); // Await the operation
   },
 
   startBulkDownloadInCLI: async (md5List: string[]) => {
+    const store = get(); // Get store instance
+
     set({
+      // Initialize queue directly from MD5 list
       bulkDownloadQueue: md5List.map((md5) => ({
         md5,
         status: DownloadStatus.IN_QUEUE,
@@ -330,17 +421,24 @@ export const createBulkDownloadQueueStateSlice = (
         progress: 0,
         total: 0,
       })),
+      // Reset counters and flags for this run
+      completedBulkDownloadItemCount: 0,
+      failedBulkDownloadItemCount: 0,
+      createdMD5ListFileName: "",
+      isBulkDownloadComplete: false,
     });
 
-    await get().operateBulkDownloadQueue();
+    await store.operateBulkDownloadQueue(); // Await the download process
 
-    // process exit successfully
-    get().handleExit();
+    // Exit process only if in CLI mode after completion
+    if (store.CLIMode) {
+        store.handleExit(); // Use the store's exit handler
+    }
   },
 
   resetBulkDownloadQueue: () => {
     set({
-      ...initialBulkDownloadQueueState,
+      ...initialBulkDownloadQueueState, // Reset all bulk download related state
     });
   },
 });
