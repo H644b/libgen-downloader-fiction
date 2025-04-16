@@ -1,18 +1,19 @@
 import { GetState, SetState } from "zustand";
-import fetch, { Response } from "node-fetch"; // Import Response type
+import fetch, { Response } from "node-fetch";
 import { TCombinedStore } from "./index";
 import { Entry } from "../../api/models/Entry";
 import { DownloadStatus } from "../../download-statuses";
 import { attempt } from "../../utils";
 import { getDocument } from "../../api/data/document";
-import { findDownloadUrlFromMirror } from "../../api/data/url";
+// Import both URL parsing functions
+import { findDownloadUrlFromMirror, parseDownloadUrls, parseFictionDetailPageForDownloadPageLink } from "../../api/data/url";
 import { downloadFile } from "../../api/data/download";
 import { httpAgent } from "../../settings";
 
 export interface IDownloadProgress {
   filename: string;
   total: number;
-  progress: number | null; // Can be null initially or during certain states
+  progress: number | null;
   status: DownloadStatus;
 }
 
@@ -51,33 +52,23 @@ export const initialDownloadQueueState = {
 export const createDownloadQueueStateSlice = (
   set: SetState<TCombinedStore>,
   get: GetState<TCombinedStore>
-): IDownloadQueueState => ({ // Added return type annotation
+): IDownloadQueueState => ({
   ...initialDownloadQueueState,
 
   pushDownloadQueue: (entry: Entry) => {
     const store = get();
-
     if (store.inDownloadQueueEntryIds.includes(entry.id)) {
        store.setWarningMessage(`"${entry.title}" is already downloading or in the queue.`);
       return;
     }
-
     set({
       downloadQueue: [...store.downloadQueue, entry],
       inDownloadQueueEntryIds: [...store.inDownloadQueueEntryIds, entry.id],
     });
-
-    // Initialize progress state
     store.updateCurrentDownloadProgress(entry.id, {
-      filename: "",
-      progress: 0,
-      total: 0,
-      status: DownloadStatus.IN_QUEUE,
+      filename: "", progress: 0, total: 0, status: DownloadStatus.IN_QUEUE,
     });
-
     store.increaseTotalAddedToDownloadQueue();
-
-    // Start processing the queue if it's not already active
     if (!store.isQueueActive) {
       store.iterateQueue();
     }
@@ -85,18 +76,11 @@ export const createDownloadQueueStateSlice = (
 
   consumeDownloadQueue: () => {
     const store = get();
-
     if (store.downloadQueue.length < 1) {
       return undefined;
     }
-
     const entry = store.downloadQueue[0];
-
-    // Remove the consumed entry from the queue state
-    set({
-      downloadQueue: store.downloadQueue.slice(1),
-    });
-
+    set({ downloadQueue: store.downloadQueue.slice(1) });
     return entry;
   },
 
@@ -109,89 +93,115 @@ export const createDownloadQueueStateSlice = (
 
   iterateQueue: async () => {
     const store = get();
-
-    // Prevent multiple concurrent iterations
     if (store.isQueueActive) return;
     set({ isQueueActive: true });
 
-    while (store.downloadQueue.length > 0) { // Check length directly
+    while (store.downloadQueue.length > 0) {
       const entry = store.consumeDownloadQueue();
-      // Should always have an entry if loop condition is met, but check just in case
       if (!entry) break;
 
-      store.updateCurrentDownloadProgress(entry.id, {
-        status: DownloadStatus.CONNECTING_TO_LIBGEN,
-      });
+      store.updateCurrentDownloadProgress(entry.id, { status: DownloadStatus.CONNECTING_TO_LIBGEN });
 
-      let downloadUrl: string | null | undefined = "";
+      let finalDownloadLink: string | null | undefined = ""; // The URL for the actual file
 
-      try { // Wrap the whole process for this entry in a try-catch
-          if (entry.alternativeDirectDownloadUrl !== undefined) {
-            downloadUrl = entry.alternativeDirectDownloadUrl;
-          } else {
-            if (!entry.mirror) {
-                throw new Error(`Entry "${entry.title}" has no mirror link.`);
+      try {
+        // Use alternative URL if provided directly
+        if (entry.alternativeDirectDownloadUrl) {
+            finalDownloadLink = entry.alternativeDirectDownloadUrl;
+        } else {
+            // --- Two-step process to get the final download page URL ---
+            let downloadPageUrl = entry.mirror; // Start with the entry's mirror link
+
+            if (!downloadPageUrl || !downloadPageUrl.startsWith('http')) {
+                throw new Error(`Invalid initial mirror link for "${entry.title}": ${downloadPageUrl}`);
             }
-            const mirrorPageDocument = await attempt(() => getDocument(entry.mirror));
-            if (!mirrorPageDocument) {
-              throw new Error(`Couldn't fetch the mirror page for "${entry.title}"`);
+
+            // If it's a fiction entry (check based on URL or maybe add type to Entry?), fetch detail page first
+            // Heuristic: Fiction detail pages usually contain '/fiction/'
+            const isFictionLink = downloadPageUrl.includes('/fiction/'); // Simple check
+
+            if (isFictionLink) {
+                const detailPageDocument = await attempt(() => getDocument(downloadPageUrl));
+                if (!detailPageDocument) {
+                    throw new Error(`Couldn't fetch fiction detail page for "${entry.title}" from ${downloadPageUrl}`);
+                }
+                const actualDownloadPageLink = parseFictionDetailPageForDownloadPageLink(detailPageDocument, store.setWarningMessage);
+                if (!actualDownloadPageLink) {
+                    throw new Error(`Could not find download page link on detail page for "${entry.title}"`);
+                }
+                downloadPageUrl = actualDownloadPageLink; // Update URL to the actual download page (e.g., books.ms)
             }
-            downloadUrl = findDownloadUrlFromMirror(mirrorPageDocument);
-          }
+            // --- End Fiction Step ---
 
-          if (!downloadUrl) {
-            throw new Error(`Couldn't find the download url for "${entry.title}"`);
-          }
+            // Now fetch the FINAL download page (e.g., books.ms page or Sci-Tech mirror page)
+            const finalDownloadPageDocument = await attempt(() => getDocument(downloadPageUrl));
+            if (!finalDownloadPageDocument) {
+                 throw new Error(`Couldn't fetch the final download page for "${entry.title}" from ${downloadPageUrl}`);
+            }
 
-          const downloadStream = await attempt(() =>
-            fetch(downloadUrl as string, { agent: httpAgent })
-          );
+            // Parse this page to find the 'GET' link
+            // Use findDownloadUrlFromMirror as it targets the main 'GET' button link
+            finalDownloadLink = findDownloadUrlFromMirror(finalDownloadPageDocument, store.setWarningMessage);
 
-          if (!downloadStream || !(downloadStream instanceof Response)) { // Check if it's a Response object
-             throw new Error(`Couldn't get a valid download stream for "${entry.title}"`);
-          }
-          if (!downloadStream.ok) { // Check HTTP status
-              throw new Error(`Download request failed for "${entry.title}" with status: ${downloadStream.status} ${downloadStream.statusText}`);
-          }
+            if (!finalDownloadLink) {
+                // Maybe try parsing for *any* link if GET fails?
+                const alternativeLinks = parseDownloadUrls(finalDownloadPageDocument);
+                if (alternativeLinks && alternativeLinks.length > 0) {
+                    finalDownloadLink = alternativeLinks[0]; // Fallback to the first available link
+                    store.setWarningMessage(`Using alternative link for "${entry.title}" as primary GET link was not found.`);
+                } else {
+                     throw new Error(`Couldn't find any download link on the final page for "${entry.title}"`);
+                }
+            }
+        } // End else block for non-alternative URL
+
+        // Now we should have the finalDownloadLink
+        if (!finalDownloadLink) {
+             throw new Error(`Failed to resolve a final download link for "${entry.title}"`);
+        }
 
 
-          store.updateCurrentDownloadProgress(entry.id, {
-            status: DownloadStatus.DOWNLOADING,
-            // Reset progress before starting new download
-            progress: 0,
-            total: Number(downloadStream.headers.get("content-length") || 0) // Get total here
-          });
+        // --- Proceed with download using finalDownloadLink ---
+        const downloadStream = await attempt(() =>
+          fetch(finalDownloadLink as string, { agent: httpAgent })
+        );
 
-          await downloadFile({
-            downloadStream,
-            onStart: (filename, total) => {
-              // Update filename and total (total might be more accurate here)
-              store.updateCurrentDownloadProgress(entry.id, { filename, total });
-            },
-            onData: (filename, chunk, total) => {
-              // Only update progress based on chunk length
-              store.updateCurrentDownloadProgress(entry.id, { progress: chunk.length });
-            },
-          });
+        if (!downloadStream || !(downloadStream instanceof Response)) {
+           throw new Error(`Couldn't get a valid download stream for "${entry.title}"`);
+        }
+        if (!downloadStream.ok) {
+            throw new Error(`Download request failed for "${entry.title}" with status: ${downloadStream.status} ${downloadStream.statusText}`);
+        }
 
-          store.increaseTotalDownloaded();
-          store.updateCurrentDownloadProgress(entry.id, {
-            status: DownloadStatus.DOWNLOADED,
-          });
+        store.updateCurrentDownloadProgress(entry.id, {
+          status: DownloadStatus.DOWNLOADING,
+          progress: 0,
+          total: Number(downloadStream.headers.get("content-length") || 0)
+        });
 
-      } catch (error: any) { // Catch any error during the process
+        await downloadFile({
+          downloadStream,
+          onStart: (filename, total) => {
+            store.updateCurrentDownloadProgress(entry.id, { filename, total });
+          },
+          onData: (filename, chunk, total) => {
+            store.updateCurrentDownloadProgress(entry.id, { progress: chunk.length });
+          },
+        });
+
+        store.increaseTotalDownloaded();
+        store.updateCurrentDownloadProgress(entry.id, { status: DownloadStatus.DOWNLOADED });
+
+      } catch (error: any) {
           store.setWarningMessage(error.message || `Couldn't download "${entry.title}"`);
           store.increaseTotalFailed();
-          store.updateCurrentDownloadProgress(entry.id, {
-            status: DownloadStatus.FAILED,
-          });
+          store.updateCurrentDownloadProgress(entry.id, { status: DownloadStatus.FAILED });
       } finally {
-          // Always remove the entry ID from the active download list, regardless of success/failure
           store.removeEntryIdFromDownloadQueue(entry.id);
       }
     } // End while loop
 
-    set({ isQueueActive: false }); // Mark queue as inactive when done
+    set({ isQueueActive: false });
   },
 
   updateCurrentDownloadProgress: (
@@ -201,16 +211,16 @@ export const createDownloadQueueStateSlice = (
     set((prev) => {
       const existingProgress = prev.downloadProgressMap[entryId] || { status: DownloadStatus.IDLE, progress: 0, total: 0, filename: '' };
       const newProgressValue = downloadProgressUpdate.progress === null
-        ? 0 // Reset progress if null is passed (e.g., on start)
-        : (existingProgress.progress || 0) + (downloadProgressUpdate.progress || 0); // Add chunk size
+        ? 0
+        : (existingProgress.progress || 0) + (downloadProgressUpdate.progress || 0);
 
       return {
         downloadProgressMap: {
           ...prev.downloadProgressMap,
           [entryId]: {
             ...existingProgress,
-            ...downloadProgressUpdate, // Apply other updates like status, filename, total
-            progress: newProgressValue, // Set the calculated progress
+            ...downloadProgressUpdate,
+            progress: newProgressValue,
           },
         },
       };
@@ -219,20 +229,14 @@ export const createDownloadQueueStateSlice = (
 
 
   increaseTotalAddedToDownloadQueue: () => {
-    set((prev) => ({
-      totalAddedToDownloadQueue: prev.totalAddedToDownloadQueue + 1,
-    }));
+    set((prev) => ({ totalAddedToDownloadQueue: prev.totalAddedToDownloadQueue + 1 }));
   },
 
   increaseTotalDownloaded: () => {
-    set((prev) => ({
-      totalDownloaded: prev.totalDownloaded + 1,
-    }));
+    set((prev) => ({ totalDownloaded: prev.totalDownloaded + 1 }));
   },
 
   increaseTotalFailed: () => {
-    set((prev) => ({
-      totalFailed: prev.totalFailed + 1,
-    }));
+    set((prev) => ({ totalFailed: prev.totalFailed + 1 }));
   },
 });
