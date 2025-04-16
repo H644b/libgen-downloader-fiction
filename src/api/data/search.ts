@@ -1,11 +1,11 @@
-import { Entry } from "../models/Entry"; // Keep the import here as it's used internally
+import { Entry } from "../models/Entry";
 import { SearchSection } from "../../tui/store/app";
 import Selector from "../selectors";
 
 export interface constructSearchURLParams {
   query: string;
   pageNumber: number;
-  pageSize: number;
+  pageSize: number; // Note: May not be applicable to fiction search
   mirror: string;
   searchReqPattern: string;
   fictionSearchReqPattern: string;
@@ -17,7 +17,7 @@ export interface constructSearchURLParams {
 export function constructSearchURL({
   query,
   pageNumber,
-  pageSize,
+  pageSize, // Keep for SciTech pattern
   mirror,
   searchReqPattern,
   fictionSearchReqPattern,
@@ -32,6 +32,8 @@ export function constructSearchURL({
 
   if (searchSection === 'fiction') {
     patternToUse = fictionSearchReqPattern;
+    // Construct fiction URL: {mirror}/fiction/?q={query}&page={pageNumber}
+    // Assumes fictionSearchReqPattern is like "{mirror}/fiction/?q={query}"
     let url = patternToUse
       .replace("{mirror}", mirror)
       .replace("{query}", encodedQuery);
@@ -47,7 +49,7 @@ export function constructSearchURL({
     .replace("{mirror}", mirror)
     .replace("{query}", encodedQuery)
     .replace("{pageNumber}", pageNumber.toString())
-    .replace("{pageSize}", pageSize.toString());
+    .replace("{pageSize}", pageSize.toString()); // pageSize used here
 
   if (applyColumnFilter && columnFilterQueryParamValue) {
     url += `&${columnFilterQueryParamKey}=${encodeURIComponent(columnFilterQueryParamValue)}`;
@@ -56,13 +58,18 @@ export function constructSearchURL({
   return url;
 }
 
+
 export function constructMD5SearchUrl(pattern: string, mirror: string, md5: string): string {
   if (!pattern) {
     console.warn("Warning: MD5 search pattern is missing in config.");
-    pattern = "{mirror}/search.php?req={md5}&column=md5";
+    pattern = "{mirror}/search.php?req={md5}&column=md5"; // Fallback SciTech MD5 search
   }
+   // Check if the pattern is intended for fiction MD5 (if a specific one exists)
+   // Example: if pattern includes '/fiction/' maybe redirect to a fiction-specific MD5 lookup?
+   // For now, assuming the provided pattern works for both or defaults to Sci-Tech style MD5 lookup.
   return pattern.replace("{mirror}", mirror).replace("{md5}", md5);
 }
+
 
 export function constructFindMD5SearchUrl(
   pattern: string,
@@ -75,6 +82,7 @@ export function constructFindMD5SearchUrl(
   }
   return pattern.replace("{mirror}", mirror).replace("{id}", idList.join(","));
 }
+
 
 export function parseSciTechEntries(
   document: Document,
@@ -144,88 +152,97 @@ export function parseSciTechEntries(
   return entries;
 }
 
+
+// --- REVISED Fiction Parsing ---
 export function parseFictionEntries(
   document: Document,
   throwError?: (message: string) => void
 ): Entry[] | undefined {
   const entries: Entry[] = [];
   const containerTableBody = document.querySelector<HTMLTableSectionElement>(
-    Selector.FICTION_RESULTS_TABLE_SELECTOR
+    Selector.FICTION_RESULTS_TABLE_SELECTOR // Using the selector defined in selectors.ts
   );
 
    if (!containerTableBody) {
-    const noResultsText = "Nothing found";
+    const noResultsText = "Nothing found"; // Text observed in the provided HTML
     if (document.body.textContent?.includes(noResultsText)) {
-        return [];
+        return []; // No results found, return empty array
     }
+     // If table body not found and it's not the "Nothing found" page, it's an error
      if (throwError) {
        throwError(`Fiction container table body not found using selector: ${Selector.FICTION_RESULTS_TABLE_SELECTOR}`);
      }
-     return undefined;
+     return undefined; // Indicate parsing failure
    }
 
-  const dataRows = Array.from(containerTableBody.querySelectorAll("tr")).filter(row => row.querySelector('td'));
+  const dataRows = Array.from(containerTableBody.querySelectorAll("tr")); // Get all rows within tbody
 
   for (let i = 0; i < dataRows.length; i++) {
     const element = dataRows[i];
     const cells = element.querySelectorAll("td");
 
-     if (cells.length < 5) {
+    // Expected Fiction table structure from HTML provided:
+    // 0: Author(s) | 1: Series | 2: Title (with link containing MD5) | 3: Language | 4: File (Type/Size) | 5: Mirrors | 6: Edit
+     if (cells.length < 6) { // Need at least 6 cells based on HTML
+        // console.warn(`Skipping Fiction row ${i + 1} due to unexpected cell count: ${cells.length}`);
         continue;
      }
 
-     const authors = cells[0]?.textContent?.trim() || "Unknown Author";
+     // Extract authors from the list items in the first cell
+     const authorElements = cells[0]?.querySelectorAll<HTMLAnchorElement>("ul.catalog_authors li a");
+     const authors = authorElements
+       ? Array.from(authorElements).map(a => a.textContent?.trim()).filter(Boolean).join(', ')
+       : "Unknown Author";
+
      const series = cells[1]?.textContent?.trim() || "";
      const titleElement = cells[2];
-     const title = titleElement?.textContent?.trim() || "Untitled";
+     const titleLinkElement = titleElement?.querySelector<HTMLAnchorElement>("a"); // The main link in the title cell
+     let title = titleLinkElement?.textContent?.trim() || titleElement?.textContent?.trim() || "Untitled";
+     // Remove edition info like '[ed.: PublishDrive]' for cleaner title
+     title = title.replace(/\[ed\.:.*?\]/g, '').trim();
+
+     // --- Extract MD5 from the title link's href ---
+     const titleHref = titleLinkElement?.getAttribute("href") || "";
+     const md5Match = titleHref.match(/([a-fA-F0-9]{32})$/); // MD5 is usually at the end of the fiction link path
+     const md5 = md5Match ? md5Match[1].toLowerCase() : "";
+     // ---
+
      const language = cells[3]?.textContent?.trim() || "Unknown";
 
-     const fileInfoCell = cells[4];
-     const fileInfoText = fileInfoCell?.textContent?.trim() || "";
+     // Cell 4 contains File info (Type / Size)
+     const fileInfoText = cells[4]?.textContent?.trim() || "";
+     const fileParts = fileInfoText.split('/');
+     const extension = fileParts[0]?.trim().toLowerCase() || "unknown";
+     const size = fileParts[1]?.trim() || "0 Mb";
 
-     const parts = fileInfoText.split('/');
-     let extension = parts[0]?.trim().toLowerCase() || "unknown";
-     let size = parts[1]?.trim() || "0 Mb";
+     // Cell 5 contains Mirror links - we need the primary link to the *details* page, which is the title link itself
+     // The links in cell 5 are direct download attempts from mirrors, which we don't use as the primary 'mirror' property here.
+     // The 'mirror' property should lead to the page where we can find download links (like the one parsed by parseDownloadUrls).
+     // In fiction, the link in the title cell serves this purpose.
+     const mirror = titleHref; // Use the href from the title cell
 
-     const mirrorLinkElement = fileInfoCell?.querySelector<HTMLAnchorElement>("a[href*='/fiction/']");
-     let mirror = mirrorLinkElement?.getAttribute("href") || "";
+     // Use MD5 as the ID if available, otherwise generate fallback (less ideal)
+     const id = md5 || `fiction-${Date.now()}-${i}-${Math.random()}`; // More unique fallback
 
-     let md5 = "";
-     const linksInCell = fileInfoCell?.querySelectorAll<HTMLAnchorElement>("a[href]") || [];
-     for (const link of linksInCell) {
-         const href = link.getAttribute("href");
-         if (href?.includes("/main/") || href?.includes("md5=")) {
-             const md5Match = href.match(/([a-fA-F0-9]{32})/i);
-             if (md5Match) {
-                 md5 = md5Match[1].toLowerCase();
-                  if (!mirror) mirror = href;
-                 break;
-             }
-         }
-         if (/^[a-f0-9]{32}$/i.test(link.textContent?.trim() || '')) {
-             md5 = link.textContent!.trim().toLowerCase();
-              if (!mirror && href) mirror = href; // Assign href if mirror not found yet
-             break;
-         }
-     }
 
-     const id = md5 || `fiction-${Date.now()}-${i}`;
-
-     if (title !== "Untitled" && mirror) {
+     if (title !== "Untitled" && mirror && md5) { // Require MD5 for a valid fiction entry
         entries.push({
-          id: id,
+          id: id, // Use MD5 as the primary ID
           authors,
-          title: series ? `${title} (${series})` : title,
-          publisher: "",
-          year: "",
-          pages: "",
+          title: series ? `${title} (${series})` : title, // Append series if present
+          publisher: "", // Not available
+          year: "",      // Not available
+          pages: "",     // Not available
           language,
           size,
           extension,
-          mirror,
+          mirror, // Link to the details page (e.g., /fiction/MD5...)
         });
+     } else {
+        // console.warn(`Skipping Fiction row ${i + 1} due to missing title, mirror link, or MD5.`);
      }
   }
 
   return entries;
 }
+// --- END: REVISED Fiction Parsing ---
