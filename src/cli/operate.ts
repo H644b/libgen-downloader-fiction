@@ -7,7 +7,8 @@ import renderTUI from "../tui/index";
 import { LAYOUT_KEY } from "../tui/layouts/keys";
 import { useBoundStore } from "../tui/store/index";
 import { attempt } from "../utils";
-import { SEARCH_MIN_CHAR } from "../../constants";
+// Import SEARCH_MIN_CHAR from the correct path
+import { SEARCH_MIN_CHAR } from "../constants";
 
 // Helper to ensure config is loaded
 async function ensureConfigLoaded() {
@@ -128,9 +129,16 @@ export const operate = async (flags: Record<string, unknown>) => {
         return; // Failure
     }
 
+    // --- FIX: Add explicit check before using entry.mirror ---
+    if (!entry || !entry.mirror) {
+        console.log(`Logic error: Entry or mirror link became invalid for MD5 ${md5}`);
+        return; // Failure
+    }
+    // --- END FIX ---
+
     // If entry and mirror link were found
     console.log(`Found entry: "${entry.title}", accessing mirror page: ${entry.mirror}`);
-    const mirrorPageDocument = await attempt(() => getDocument(entry.mirror));
+    const mirrorPageDocument = await attempt(() => getDocument(entry.mirror)); // Safe to use entry.mirror
     if (!mirrorPageDocument) {
       console.log(`Failed to get mirror page document from ${entry.mirror}`);
       return;
