@@ -1,10 +1,12 @@
+// src/api/data/config.ts
 import fetch from "node-fetch";
 import { CONFIGURATION_URL } from "../../settings";
 
 export interface Config {
   latestVersion: string;
   mirrors: string[];
-  searchReqPattern: string;
+  searchReqPattern: string; // Sci-Tech search pattern
+  fictionSearchReqPattern: string; // Fiction search pattern
   searchByMD5Pattern: string;
   MD5ReqPattern: string;
   columnFilterQueryParamKey: string;
@@ -17,16 +19,19 @@ export async function fetchConfig(): Promise<Config> {
     const json = await response.json();
     const conf = json as Record<string, unknown>;
 
+    // --- START MODIFICATION ---
     return {
       latestVersion: (conf["latest_version"] as string) || "",
       mirrors: (conf["mirrors"] as string[]) || [],
       searchReqPattern: (conf["searchReqPattern"] as string) || "",
+      fictionSearchReqPattern: (conf["fictionSearchReqPattern"] as string) || "", // Added line
       searchByMD5Pattern: (conf["searchByMD5Pattern"] as string) || "",
       MD5ReqPattern: (conf["MD5ReqPattern"] as string) || "",
       columnFilterQueryParamKey: (conf["columnFilterQueryParamKey"] as string) || "",
       columnFilterQueryParamValues:
         (conf["columnFilterQueryParamValues"] as Record<string, string>) || {},
     };
+    // --- END MODIFICATION ---
   } catch (e) {
     throw new Error("Error occured while fetching configuration.");
   }
@@ -39,7 +44,8 @@ export async function findMirror(
   for (let i = 0; i < mirrors.length; i++) {
     const mirror = mirrors[i];
     try {
-      await fetch(mirror);
+      // Use a HEAD request for efficiency, just checking reachability
+      await fetch(mirror, { method: 'HEAD', timeout: 5000 }); // Added timeout
       return mirror;
     } catch (e) {
       onMirrorFail(mirror);
