@@ -70,11 +70,9 @@ export const createBulkDownloadQueueStateSlice = (
 
   addToBulkDownloadQueue: (entry: Entry) => {
     const store = get();
-
     if (store.bulkDownloadSelectedEntryIds.includes(entry.id)) {
       return;
     }
-
     set({
       bulkDownloadSelectedEntries: [...store.bulkDownloadSelectedEntries, entry],
       bulkDownloadSelectedEntryIds: [...store.bulkDownloadSelectedEntryIds, entry.id],
@@ -83,17 +81,14 @@ export const createBulkDownloadQueueStateSlice = (
 
   removeFromBulkDownloadQueue: (entryId: string) => {
     const store = get();
-
     if (!store.bulkDownloadSelectedEntryIds.includes(entryId)) {
       return;
     }
-
     set({
       bulkDownloadSelectedEntries: store.bulkDownloadSelectedEntries.filter(
         (entry) => entry.id !== entryId
       ),
     });
-
     store.removeEntryIdFromBulkDownloadQueue(entryId);
   },
 
@@ -112,11 +107,7 @@ export const createBulkDownloadQueueStateSlice = (
         if (index !== i) {
           return item;
         }
-
-        return {
-          ...item,
-          status: DownloadStatus.PROCESSING,
-        };
+        return { ...item, status: DownloadStatus.PROCESSING };
       }),
     }));
   },
@@ -127,13 +118,7 @@ export const createBulkDownloadQueueStateSlice = (
         if (index !== i) {
           return item;
         }
-
-        return {
-          ...item,
-          filename,
-          total,
-          status: DownloadStatus.DOWNLOADING,
-        };
+        return { ...item, filename, total, status: DownloadStatus.DOWNLOADING };
       }),
     }));
   },
@@ -144,13 +129,7 @@ export const createBulkDownloadQueueStateSlice = (
         if (index !== i) {
           return item;
         }
-
-        return {
-          ...item,
-          filename,
-          total,
-          progress: (item.progress || 0) + chunk.length,
-        };
+        return { ...item, filename, total, progress: (item.progress || 0) + chunk.length };
       }),
     }));
   },
@@ -161,17 +140,10 @@ export const createBulkDownloadQueueStateSlice = (
         if (index !== i) {
           return item;
         }
-
-        return {
-          ...item,
-          status: DownloadStatus.DOWNLOADED,
-        };
+        return { ...item, status: DownloadStatus.DOWNLOADED };
       }),
     }));
-
-    set((prev) => ({
-      completedBulkDownloadItemCount: prev.completedBulkDownloadItemCount + 1,
-    }));
+    set((prev) => ({ completedBulkDownloadItemCount: prev.completedBulkDownloadItemCount + 1 }));
   },
 
   onBulkQueueItemFail: (index: number) => {
@@ -180,26 +152,33 @@ export const createBulkDownloadQueueStateSlice = (
         if (index !== i) {
           return item;
         }
-
-        return {
-          ...item,
-          status: DownloadStatus.FAILED,
-        };
+        return { ...item, status: DownloadStatus.FAILED };
       }),
     }));
-
-    set((prev) => ({
-      failedBulkDownloadItemCount: prev.failedBulkDownloadItemCount + 1,
-    }));
+    set((prev) => ({ failedBulkDownloadItemCount: prev.failedBulkDownloadItemCount + 1 }));
   },
 
   operateBulkDownloadQueue: async () => {
-    const store = get(); // Get store once
+    const store = get();
     const bulkDownloadQueue = store.bulkDownloadQueue;
+    const baseMirror = store.mirror; // Get base mirror once
+
+    if (!baseMirror) {
+        console.error("Error: Cannot operate bulk download queue without a configured mirror.");
+        // Mark all as failed?
+        set(prev => ({
+            bulkDownloadQueue: prev.bulkDownloadQueue.map(item => ({ ...item, status: DownloadStatus.FAILED })),
+            failedBulkDownloadItemCount: prev.bulkDownloadQueue.length,
+            isBulkDownloadComplete: true,
+            createdMD5ListFileName: "Operation failed: No mirror."
+        }));
+        return;
+    }
+
 
     for (let i = 0; i < bulkDownloadQueue.length; i++) {
       const item = bulkDownloadQueue[i];
-      const md5SearchUrl = constructMD5SearchUrl(store.searchByMD5Pattern, store.mirror, item.md5);
+      const md5SearchUrl = constructMD5SearchUrl(store.searchByMD5Pattern, baseMirror, item.md5);
 
       store.onBulkQueueItemProcessing(i);
 
@@ -213,12 +192,13 @@ export const createBulkDownloadQueueStateSlice = (
       // Try parsing as Sci-Tech first, then Fiction if that fails
       let entry: Entry | undefined = parseSciTechEntries(searchPageDocument)?.[0];
       if (!entry) {
-          entry = parseFictionEntries(searchPageDocument)?.[0];
+          // --- FIX: Pass baseMirror to parseFictionEntries ---
+          entry = parseFictionEntries(searchPageDocument, baseMirror, store.setWarningMessage)?.[0];
+          // --- END FIX ---
       }
 
-      // --- REFACTORED CHECK ---
+      // Refactored Check
       if (!entry) {
-         // Try getting download link directly from the current page (MD5 search might redirect)
          const directDownloadUrl = findDownloadUrlFromMirror(searchPageDocument);
          if (directDownloadUrl) {
             const downloadStream = await attempt(() =>
@@ -236,26 +216,22 @@ export const createBulkDownloadQueueStateSlice = (
                  store.setWarningMessage(`Download failed for MD5 ${item.md5} (direct attempt)`);
                  store.onBulkQueueItemFail(i);
               }
-              continue; // Move to next item
+              continue;
             }
          }
-         // If direct attempt also fails or no entry found initially
          store.setWarningMessage(`Couldn't find the entry details for ${item.md5}`);
          store.onBulkQueueItemFail(i);
          continue;
       }
 
-      // Now 'entry' is guaranteed to be defined. Check for 'entry.mirror'.
       if (!entry.mirror) {
           store.setWarningMessage(`Entry found for ${item.md5}, but no mirror link was parsed.`);
           store.onBulkQueueItemFail(i);
           continue;
       }
-      // --- END REFACTORED CHECK ---
+      // End Refactored Check
 
-
-      // Proceed with mirror page, 'entry' and 'entry.mirror' are now guaranteed to be defined
-      const mirrorPageDocument = await attempt(() => getDocument(entry!.mirror)); // Use non-null assertion (!) or rely on TS inferring from the check above
+      const mirrorPageDocument = await attempt(() => getDocument(entry!.mirror));
       if (!mirrorPageDocument) {
         store.setWarningMessage(`Couldn't fetch the mirror page for ${item.md5}`);
         store.onBulkQueueItemFail(i);
@@ -270,9 +246,7 @@ export const createBulkDownloadQueueStateSlice = (
       }
 
       const downloadStream = await attempt(() =>
-        fetch(downloadUrl, {
-          agent: httpAgent,
-        })
+        fetch(downloadUrl, { agent: httpAgent })
       );
        if (!downloadStream || !(downloadStream instanceof Response)) {
          store.setWarningMessage(`Couldn't get a valid download stream for ${item.md5}`);
@@ -285,7 +259,6 @@ export const createBulkDownloadQueueStateSlice = (
           continue;
        }
 
-
       try {
         await downloadFile({
           downloadStream,
@@ -296,7 +269,6 @@ export const createBulkDownloadQueueStateSlice = (
             store.onBulkQueueItemData(i, filename, chunk, total);
           },
         });
-
         store.onBulkQueueItemComplete(i);
       } catch (err) {
          store.setWarningMessage(`Download failed for MD5 ${item.md5}: ${err instanceof Error ? err.message : String(err)}`);
@@ -304,9 +276,7 @@ export const createBulkDownloadQueueStateSlice = (
       }
     } // End for loop
 
-    set({
-      isBulkDownloadComplete: true,
-    });
+    set({ isBulkDownloadComplete: true });
 
     const completedMD5List = get()
       .bulkDownloadQueue.filter((item) => item.status === DownloadStatus.DOWNLOADED)
@@ -315,9 +285,7 @@ export const createBulkDownloadQueueStateSlice = (
     if (completedMD5List.length > 0) {
         try {
           const filename = await createMD5ListFile(completedMD5List);
-          set({
-            createdMD5ListFileName: filename,
-          });
+          set({ createdMD5ListFileName: filename });
         } catch (err) {
           get().setWarningMessage("Couldn't create the completed MD5 list file");
         }
@@ -379,8 +347,6 @@ export const createBulkDownloadQueueStateSlice = (
   },
 
   resetBulkDownloadQueue: () => {
-    set({
-      ...initialBulkDownloadQueueState,
-    });
+    set({ ...initialBulkDownloadQueueState });
   },
 });
