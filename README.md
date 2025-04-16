@@ -64,6 +64,8 @@ v2.0.4
 - Added basic parsing support for Fiction search results page structure.
 - Column filters in the interactive search UI are now only shown/applicable when searching with `--scitech`.
 
+---
+
 v2.0.0
 
 - Added alternative downloads.
