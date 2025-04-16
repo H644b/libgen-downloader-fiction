@@ -5,11 +5,12 @@ import Label from "../../labels";
 import { Entry } from "../../api/models/Entry";
 import { constructSearchURL, parseSciTechEntries, parseFictionEntries } from "../../api/data/search";
 import { SearchSection } from "../store/app";
-import { SEARCH_PAGE_SIZE } from "../../settings"; // Correct import path for SEARCH_PAGE_SIZE
-import { SEARCH_MIN_CHAR } from "../../constants"; // Correct import path for SEARCH_MIN_CHAR
+import { SEARCH_PAGE_SIZE, httpAgent } from "../../settings";
+import { SEARCH_MIN_CHAR } from "../../constants";
 import { attempt } from "../../utils";
 import { getDocument } from "../../api/data/document";
-import { parseDownloadUrls } from "../../api/data/url";
+// Import the new parser function as well
+import { parseDownloadUrls, parseFictionDetailPageForDownloadPageLink } from "../../api/data/url";
 
 export interface IEventActions {
   backToSearch: () => void;
@@ -25,7 +26,8 @@ export const createEventActionsSlice = (
   set: SetState<TCombinedStore>,
   get: GetState<TCombinedStore>
 ): IEventActions => ({
-  backToSearch: () => {
+  // backToSearch, search, handleSearchSubmit, nextPage, prevPage remain the same
+    backToSearch: () => {
     const store = get();
     store.resetAppState();
     store.setActiveLayout(LAYOUT_KEY.SEARCH_LAYOUT);
@@ -36,7 +38,7 @@ export const createEventActionsSlice = (
   search: async (query: string, pageNumber: number) => {
     const store = get();
     const currentSearchSection: SearchSection = store.searchSection;
-    const baseMirrorUrl = store.mirror; // Get the base mirror URL
+    const baseMirrorUrl = store.mirror;
 
     if (!baseMirrorUrl) {
         store.setErrorMessage("Cannot search: No working LibGen mirror found.");
@@ -80,15 +82,12 @@ export const createEventActionsSlice = (
 
     let entries: Entry[] | undefined;
     if (currentSearchSection === 'fiction') {
-        // Pass the baseMirrorUrl to the fiction parser
         entries = parseFictionEntries(pageDocument, baseMirrorUrl, store.setWarningMessage);
     } else {
-        // SciTech parser doesn't need the base mirror in the same way
         entries = parseSciTechEntries(pageDocument, store.setWarningMessage);
     }
 
     if (entries === undefined) {
-      // Warning should be set by parser if specific error occurred
       return [];
     }
 
@@ -146,7 +145,6 @@ export const createEventActionsSlice = (
       return;
     }
     const entries = await store.search(store.searchValue, prevPageNumber);
-    // Check if search returned empty array and it wasn't page 0 (which is invalid anyway)
     if (entries.length === 0 && prevPageNumber > 0) {
         if (!store.warningMessage?.includes(`page ${prevPageNumber}`)) {
             store.setWarningMessage(`Could not retrieve results for page ${prevPageNumber}.`);
@@ -166,22 +164,47 @@ export const createEventActionsSlice = (
       return cachedAlternativeDownloadURLs;
     }
 
-    // Ensure entry.mirror is an absolute URL before fetching
     if (!entry.mirror || !entry.mirror.startsWith('http')) {
         store.setWarningMessage(`Cannot fetch alternative URLs: Invalid mirror link for "${entry.title}" (${entry.mirror})`);
         return [];
     }
 
-    const pageDocument = await attempt(() => getDocument(entry.mirror));
-    if (!pageDocument) {
-      store.setWarningMessage(`Couldn't fetch the entry page for "${entry.title}" from ${entry.mirror}`);
+    let finalDownloadPageUrl = entry.mirror; // Start with the entry's mirror link
+
+    // --- Add step for Fiction entries ---
+    if (store.searchSection === 'fiction') {
+        // Fetch the fiction detail page first
+        const detailPageDocument = await attempt(() => getDocument(entry.mirror));
+        if (!detailPageDocument) {
+          store.setWarningMessage(`Couldn't fetch fiction detail page for "${entry.title}" from ${entry.mirror}`);
+          return [];
+        }
+        // Parse it to find the link to the actual download page (e.g., books.ms)
+        const downloadPageLink = parseFictionDetailPageForDownloadPageLink(detailPageDocument, store.setWarningMessage);
+        if (!downloadPageLink) {
+            // Warning should be set by the parser
+            store.setWarningMessage(`Could not find download page link on detail page for "${entry.title}"`);
+            return [];
+        }
+        finalDownloadPageUrl = downloadPageLink; // Update the URL to fetch next
+    }
+    // --- End Fiction Step ---
+
+    // Now fetch the FINAL download page (for both Sci-Tech and Fiction)
+    const finalDownloadPageDocument = await attempt(() => getDocument(finalDownloadPageUrl));
+    if (!finalDownloadPageDocument) {
+      store.setWarningMessage(`Couldn't fetch the final download page for "${entry.title}" from ${finalDownloadPageUrl}`);
       return [];
     }
-    const parsedDownloadUrls = parseDownloadUrls(pageDocument, store.setWarningMessage);
+
+    // Parse the final download page using the original function
+    const parsedDownloadUrls = parseDownloadUrls(finalDownloadPageDocument, store.setWarningMessage);
     if (!parsedDownloadUrls) {
-      // Warning should be set by parseDownloadUrls
+      // Warning should be set by parseDownloadUrls if no links found
+      store.setWarningMessage(`No download links found on final download page for "${entry.title}"`);
       return [];
     }
+
     store.setAlternativeDownloadURLsCacheMap(entry.id, parsedDownloadUrls);
     return parsedDownloadUrls;
   },
