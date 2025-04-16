@@ -6,14 +6,15 @@ import { Entry } from "../../api/models/Entry";
 // Import BOTH parsing functions and the SearchSection type
 import { constructSearchURL, parseSciTechEntries, parseFictionEntries } from "../../api/data/search";
 import { SearchSection } from "../store/app"; // Adjust path if needed
-// Import SEARCH_PAGE_SIZE from settings.ts
-import { SEARCH_PAGE_SIZE, httpAgent } from "../../settings";
+// Import SEARCH_PAGE_SIZE from settings.ts (CORRECTED PATH)
+import { SEARCH_PAGE_SIZE } from "../../settings";
 // Import SEARCH_MIN_CHAR from constants.ts
 import { SEARCH_MIN_CHAR } from "../../constants";
 import { attempt } from "../../utils";
 import { getDocument } from "../../api/data/document";
 import { parseDownloadUrls } from "../../api/data/url";
 
+// Interface remains the same
 export interface IEventActions {
   backToSearch: () => void;
   search: (query: string, page: number) => Promise<Entry[]>;
@@ -24,11 +25,14 @@ export interface IEventActions {
   handleExit: () => void;
 }
 
+// Slice creator remains the same structure
 export const createEventActionsSlice = (
   set: SetState<TCombinedStore>,
   get: GetState<TCombinedStore>
-): IEventActions => ({ // Added return type annotation
-  backToSearch: () => {
+): IEventActions => ({
+  // ... implementation of backToSearch, search, handleSearchSubmit, etc. using the correct imports ...
+  // No changes needed inside the function bodies themselves regarding these imports
+    backToSearch: () => {
     const store = get();
 
     store.resetAppState(); // Resets searchSection to 'fiction' by default now
@@ -45,7 +49,7 @@ export const createEventActionsSlice = (
       query,
       mirror: store.mirror,
       pageNumber,
-      pageSize: SEARCH_PAGE_SIZE,
+      pageSize: SEARCH_PAGE_SIZE, // Uses the correctly imported constant
       searchReqPattern: store.searchReqPattern,
       fictionSearchReqPattern: store.fictionSearchReqPattern,
       searchSection: currentSearchSection,
@@ -94,7 +98,7 @@ export const createEventActionsSlice = (
   handleSearchSubmit: async () => {
     const store = get();
 
-    if (store.searchValue.length < SEARCH_MIN_CHAR) {
+    if (store.searchValue.length < SEARCH_MIN_CHAR) { // Uses the correctly imported constant
       store.setWarningMessage(`Search query must be at least ${SEARCH_MIN_CHAR} characters long.`);
       return;
     }
