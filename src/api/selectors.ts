@@ -1,18 +1,16 @@
 export default {
   // --- Sci-Tech Selectors ---
-  // Selector for the main table body containing Sci-Tech search results
-  SCITECH_RESULTS_TABLE_SELECTOR: ".c tbody", // Assumes results are in <tbody> within a table with class 'c'
+  SCITECH_RESULTS_TABLE_SELECTOR: ".c tbody",
 
   // --- Fiction Selectors ---
-  // Selector for the main table body containing Fiction search results
-  // Often fiction results are in a table with class 'catalog'
-  FICTION_RESULTS_TABLE_SELECTOR: "table.catalog tbody", // Verify this selector against the actual fiction page HTML
+  FICTION_RESULTS_TABLE_SELECTOR: "table.catalog tbody",
+  // Selector for the link(s) on the FICTION DETAIL page that lead to the DOWNLOAD page (like books.ms)
+  // It's within the 'Download:' row, inside a 'ul.record_mirrors > li > a'
+  FICTION_DETAIL_DL_PAGE_LINK_SELECTOR: "td.record_mirrors a", // Gets the first link in the download mirrors list
 
-  // --- Download Page Selectors (Potentially Common) ---
-  // These selectors are typically used on the *details* page accessed via the mirror link from search results.
-  // They might be consistent across Sci-Tech and Fiction detail pages, but verification is recommended.
-  // Selector for the primary download link (often within an H2 under #download div)
-  MAIN_DOWNLOAD_URL_SELECTOR: "#info #download h2 a",
-  // Selector for the container (usually a UL) of alternative download links
-  OTHER_DOWNLOAD_URLS_SELECTOR: "#info #download ul",
+  // --- Download Page Selectors (Common to Sci-Tech and Fiction Download Pages like books.ms) ---
+  // Selector for the primary "GET" link on the final download page
+  MAIN_DOWNLOAD_URL_SELECTOR: "#download h2 a", // The big GET button link
+  // Selector for the container of alternative (IPFS, TOR) links on the final download page
+  OTHER_DOWNLOAD_URLS_SELECTOR: "#download ul", // The list containing Cloudflare, IPFS.io etc.
 };
