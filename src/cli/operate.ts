@@ -1,6 +1,9 @@
 import fs from "fs";
 import { getDocument } from "../api/data/document";
-import { constructMD5SearchUrl, parseSciTechEntries, parseFictionEntries, Entry } from "../api/data/search"; // Keep Entry type import
+// Remove 'Entry' from this import
+import { constructMD5SearchUrl, parseSciTechEntries, parseFictionEntries } from "../api/data/search";
+// Import Entry directly from its definition file
+import { Entry } from "../api/models/Entry";
 import { findDownloadUrlFromMirror } from "../api/data/url";
 import renderTUI from "../tui/index";
 import { LAYOUT_KEY } from "../tui/layouts/keys";
@@ -76,7 +79,8 @@ export const operate = async (flags: Record<string, unknown>) => {
 
   if (flags.url) {
     const configLoaded = await ensureConfigLoaded();
-    if (!configLoaded || !store.mirror) { // Ensure mirror is available after config load
+    // Make sure store.mirror (baseMirror) is available
+    if (!configLoaded || !store.mirror) {
         console.error("Cannot get URL: LibGen mirror configuration is missing or invalid.");
         return;
     }
@@ -95,12 +99,11 @@ export const operate = async (flags: Record<string, unknown>) => {
       return;
     }
 
-    // Try parsing as Sci-Tech first, then Fiction if that fails
+    // The type of 'entry' will be inferred as `Entry | undefined`
     let entry: Entry | undefined = parseSciTechEntries(searchPageDocument)?.[0];
     if (!entry) {
-        // --- FIX: Pass baseMirror (which is store.mirror) to parseFictionEntries ---
-        entry = parseFictionEntries(searchPageDocument, store.mirror, console.error)?.[0]; // Pass mirror and basic logger
-        // --- END FIX ---
+        // Pass baseMirror (which is store.mirror) to parseFictionEntries
+        entry = parseFictionEntries(searchPageDocument, store.mirror, console.error)?.[0];
     }
 
     // Refactored Check
