@@ -22,11 +22,11 @@ export const initialCacheState = {
 export const createCacheStateSlice = (
   set: SetState<TCombinedStore>,
   get: GetState<TCombinedStore>
-) => ({
+): ICacheState => ({ // Added return type annotation
   ...initialCacheState,
 
   setEntryCacheMap: (searchURL: string, entryList: Entry[]) => {
-    const store = get();
+    const store = get(); // get() might not be needed here, but consistent
 
     const entryCacheMap = {
       ...store.entryCacheMap,
@@ -39,27 +39,34 @@ export const createCacheStateSlice = (
   resetEntryCacheMap: () => {
     set({
       entryCacheMap: {},
+      alternativeDownloadURLsCacheMap: {}, // Also reset alternative URLs cache
     });
   },
 
   lookupPageCache: (pageNumber: number) => {
     const store = get();
 
+    // Construct the cache key (search URL) using all relevant parameters
     const searchURLAsCacheMapKey = constructSearchURL({
       query: store.searchValue,
       mirror: store.mirror,
       pageNumber,
       pageSize: SEARCH_PAGE_SIZE,
       searchReqPattern: store.searchReqPattern,
+      // Add the missing properties from the store state:
+      fictionSearchReqPattern: store.fictionSearchReqPattern,
+      searchSection: store.searchSection,
       columnFilterQueryParamKey: store.columnFilterQueryParamKey,
-      columnFilterQueryParamValue: store.selectedSearchByOption,
+      // Pass filter value based on current section
+      columnFilterQueryParamValue: store.searchSection === 'scitech' ? store.selectedSearchByOption : null,
     });
 
+    // Return the cached entries or an empty array if not found
     return store.entryCacheMap[searchURLAsCacheMapKey] || [];
   },
 
   setAlternativeDownloadURLsCacheMap: (entryId: string, urlList: string[]) => {
-    const store = get();
+    const store = get(); // get() might not be needed here
 
     const alternativeDownloadURLsCacheMap = {
       ...store.alternativeDownloadURLsCacheMap,
