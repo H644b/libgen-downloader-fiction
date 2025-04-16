@@ -1,7 +1,7 @@
 import fs from "fs";
 import { getDocument } from "../api/data/document";
 // Import both parsers - decide which one to use later based on context if needed for MD5 lookup
-import { constructMD5SearchUrl, parseSciTechEntries, parseFictionEntries } from "../api/data/search";
+import { constructMD5SearchUrl, parseSciTechEntries, parseFictionEntries, Entry } from "../api/data/search"; // Import Entry type
 import { findDownloadUrlFromMirror } from "../api/data/url";
 import renderTUI from "../tui/index";
 import { LAYOUT_KEY } from "../tui/layouts/keys";
@@ -99,8 +99,6 @@ export const operate = async (flags: Record<string, unknown>) => {
     }
 
     console.log("Finding download url for MD5:", md5);
-    // MD5 lookup usually redirects to the book page, which might be Sci-Tech or Fiction style
-    // The `searchByMD5Pattern` should point to a URL that works regardless of original section, if possible.
     const md5SearchUrl = constructMD5SearchUrl(store.searchByMD5Pattern, store.mirror, md5);
 
     const searchPageDocument = await attempt(() => getDocument(md5SearchUrl));
@@ -110,35 +108,35 @@ export const operate = async (flags: Record<string, unknown>) => {
     }
 
     // Try parsing as Sci-Tech first, then Fiction if that fails
-    let entry = parseSciTechEntries(searchPageDocument)?.[0];
+    let entry: Entry | undefined = parseSciTechEntries(searchPageDocument)?.[0];
     if (!entry) {
         entry = parseFictionEntries(searchPageDocument)?.[0];
     }
 
-    // Check if entry or entry.mirror is valid before proceeding
-    if (!entry || !entry.mirror) {
+    // --- REFACTORED CHECK ---
+    if (!entry) {
         console.log("Could not parse standard entry format, attempting direct mirror check...");
-        // Sometimes the MD5 search URL itself IS the mirror page if only one result
-        const directDownloadUrl = findDownloadUrlFromMirror(searchPageDocument); // Try parsing current page
+        const directDownloadUrl = findDownloadUrlFromMirror(searchPageDocument);
         if (directDownloadUrl) {
              console.log("Found direct download link:", directDownloadUrl);
              return; // Success!
         }
-        // If direct parsing also fails
-        console.log(`Failed to parse entry details or find mirror link for MD5 ${md5}.`);
+        console.log(`Failed to parse entry details for MD5 ${md5}.`);
         return; // Failure
     }
 
-    // --- FIX: Add explicit check before using entry.mirror ---
-    if (!entry || !entry.mirror) {
-        console.log(`Logic error: Entry or mirror link became invalid for MD5 ${md5}`);
+    // Now 'entry' is guaranteed to be defined. Check for 'entry.mirror'.
+    if (!entry.mirror) {
+        console.log(`Entry found for ${md5}, but no mirror link was parsed.`);
         return; // Failure
     }
-    // --- END FIX ---
+    // --- END REFACTORED CHECK ---
+
 
     // If entry and mirror link were found
     console.log(`Found entry: "${entry.title}", accessing mirror page: ${entry.mirror}`);
-    const mirrorPageDocument = await attempt(() => getDocument(entry.mirror)); // Safe to use entry.mirror
+    // Safe to use entry.mirror here because of the checks above
+    const mirrorPageDocument = await attempt(() => getDocument(entry!.mirror)); // Can use non-null assertion or rely on TS inference
     if (!mirrorPageDocument) {
       console.log(`Failed to get mirror page document from ${entry.mirror}`);
       return;
