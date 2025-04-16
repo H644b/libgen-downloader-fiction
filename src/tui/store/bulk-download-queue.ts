@@ -1,5 +1,5 @@
 import { GetState, SetState } from "zustand";
-import fetch from "node-fetch";
+import fetch, { Response } from "node-fetch"; // Import Response type
 import { TCombinedStore } from "./index";
 import { Entry } from "../../api/models/Entry";
 import { DownloadStatus } from "../../download-statuses";
@@ -245,9 +245,17 @@ export const createBulkDownloadQueueStateSlice = (
          continue;
       }
 
+      // --- FIX: Add explicit check before using entry.mirror ---
+      // This check might seem redundant due to the logic above, but it satisfies TypeScript's flow analysis
+      if (!entry || !entry.mirror) {
+          store.setWarningMessage(`Logic error: Entry or mirror link became invalid for ${item.md5}`);
+          store.onBulkQueueItemFail(i);
+          continue;
+      }
+      // --- END FIX ---
 
       // Proceed with mirror page if entry was found
-      const mirrorPageDocument = await attempt(() => getDocument(entry.mirror));
+      const mirrorPageDocument = await attempt(() => getDocument(entry.mirror)); // Now safe to use entry.mirror
       if (!mirrorPageDocument) {
         store.setWarningMessage(`Couldn't fetch the mirror page for ${item.md5}`);
         store.onBulkQueueItemFail(i);
@@ -266,11 +274,17 @@ export const createBulkDownloadQueueStateSlice = (
           agent: httpAgent,
         })
       );
-      if (!downloadStream) {
-        store.setWarningMessage(`Couldn't fetch the download stream for ${item.md5}`);
-        store.onBulkQueueItemFail(i);
-        continue;
-      }
+       if (!downloadStream || !(downloadStream instanceof Response)) { // Check if it's a Response object
+         store.setWarningMessage(`Couldn't get a valid download stream for ${item.md5}`);
+         store.onBulkQueueItemFail(i);
+         continue;
+       }
+       if (!downloadStream.ok) { // Check HTTP status
+          store.setWarningMessage(`Download request failed for ${item.md5} with status: ${downloadStream.status} ${downloadStream.statusText}`);
+          store.onBulkQueueItemFail(i);
+          continue;
+       }
+
 
       try {
         await downloadFile({
@@ -288,7 +302,7 @@ export const createBulkDownloadQueueStateSlice = (
          store.setWarningMessage(`Download failed for MD5 ${item.md5}: ${err instanceof Error ? err.message : String(err)}`);
         store.onBulkQueueItemFail(i);
       }
-    }
+    } // End for loop
 
     set({
       isBulkDownloadComplete: true,
@@ -328,80 +342,14 @@ export const createBulkDownloadQueueStateSlice = (
     });
     store.setActiveLayout(LAYOUT_KEY.BULK_DOWNLOAD_LAYOUT);
 
-    // Initialize bulk queue with status FETCHING_MD5
-    set((prev) => ({
-      bulkDownloadQueue: prev.bulkDownloadSelectedEntries.map((entry) => ({ // Use selected entry ID
-        md5: entry.id, // Assuming entry.id IS the MD5 for Sci-Tech entries
-        status: DownloadStatus.FETCHING_MD5, // Initial status
+    // Directly assign MD5 from entry ID and set status to IN_QUEUE (simpler if ID=MD5 assumption holds)
+     set((prev) => ({
+      bulkDownloadQueue: prev.bulkDownloadSelectedEntries.map((entry, index) => ({
+        md5: entry.id, // Assuming ID is MD5
+        status: DownloadStatus.IN_QUEUE,
         filename: "",
         progress: 0,
         total: 0,
-      })),
-    }));
-
-
-    // If we have Sci-Tech entries, their ID is often the MD5.
-    // If we mix Fiction (where ID might not be MD5), this needs adjustment.
-    // Assuming for now `bulkDownloadSelectedEntries` only contains items where ID=MD5.
-    // If not, we'd need to fetch MD5s similar to the old implementation:
-
-    /*
-    // --- Code to fetch MD5s if entry.id is not guaranteed to be MD5 ---
-    const entryIds = store.bulkDownloadSelectedEntryIds;
-    const findMD5SearchUrl = constructFindMD5SearchUrl(store.MD5ReqPattern, store.mirror, entryIds);
-
-    const md5ListResponse = await attempt(() => fetch(findMD5SearchUrl));
-    if (!md5ListResponse) {
-      store.setWarningMessage("Couldn't fetch the MD5 list for bulk download");
-      // Mark all items as failed?
-      set(prev => ({
-          bulkDownloadQueue: prev.bulkDownloadQueue.map(item => ({...item, status: DownloadStatus.FAILED })),
-          failedBulkDownloadItemCount: prev.bulkDownloadQueue.length,
-          isBulkDownloadComplete: true,
-          createdMD5ListFileName: "Failed to fetch MD5s.",
-      }));
-      return;
-    }
-
-    try {
-        const md5Arr = (await md5ListResponse.json()) as { id: string, md5: string }[]; // Assuming JSON response includes ID
-        const md5Map = new Map(md5Arr.map(item => [item.id, item.md5]));
-
-        set((prev) => ({
-          bulkDownloadQueue: prev.bulkDownloadQueue.map((item, index) => {
-              const originalEntry = prev.bulkDownloadSelectedEntries[index];
-              const md5 = md5Map.get(originalEntry.id);
-              if (!md5) {
-                  store.setWarningMessage(`Could not find MD5 for entry ID ${originalEntry.id}`);
-                  store.onBulkQueueItemFail(index); // Use index to mark fail
-                  return {...item, status: DownloadStatus.FAILED }; // Mark as failed
-              }
-              return {
-                ...item,
-                status: DownloadStatus.IN_QUEUE,
-                md5: md5, // Assign fetched MD5
-              };
-          }),
-        }));
-    } catch (e) {
-        store.setWarningMessage(`Failed to parse MD5 list response: ${e instanceof Error ? e.message : String(e)}`);
-        set(prev => ({
-            bulkDownloadQueue: prev.bulkDownloadQueue.map(item => ({...item, status: DownloadStatus.FAILED })),
-            failedBulkDownloadItemCount: prev.bulkDownloadQueue.length,
-            isBulkDownloadComplete: true,
-            createdMD5ListFileName: "Failed to parse MD5 list.",
-        }));
-        return;
-    }
-    // --- End code to fetch MD5s ---
-    */
-
-    // Directly assign MD5 from entry ID and set status to IN_QUEUE (simpler if ID=MD5 assumption holds)
-     set((prev) => ({
-      bulkDownloadQueue: prev.bulkDownloadQueue.map((item, index) => ({
-        ...item,
-        md5: prev.bulkDownloadSelectedEntries[index].id, // Assuming ID is MD5
-        status: DownloadStatus.IN_QUEUE,
       })),
     }));
 
