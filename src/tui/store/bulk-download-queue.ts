@@ -65,7 +65,7 @@ export const initialBulkDownloadQueueState = {
 export const createBulkDownloadQueueStateSlice = (
   set: SetState<TCombinedStore>,
   get: GetState<TCombinedStore>
-): IBulkDownloadQueueState => ({ // Added return type annotation
+): IBulkDownloadQueueState => ({
   ...initialBulkDownloadQueueState,
 
   addToBulkDownloadQueue: (entry: Entry) => {
@@ -211,13 +211,13 @@ export const createBulkDownloadQueueStateSlice = (
       }
 
       // Try parsing as Sci-Tech first, then Fiction if that fails
-      let entry = parseSciTechEntries(searchPageDocument)?.[0];
+      let entry: Entry | undefined = parseSciTechEntries(searchPageDocument)?.[0];
       if (!entry) {
           entry = parseFictionEntries(searchPageDocument)?.[0];
       }
 
-
-      if (!entry || !entry.mirror) {
+      // --- REFACTORED CHECK ---
+      if (!entry) {
          // Try getting download link directly from the current page (MD5 search might redirect)
          const directDownloadUrl = findDownloadUrlFromMirror(searchPageDocument);
          if (directDownloadUrl) {
@@ -239,23 +239,23 @@ export const createBulkDownloadQueueStateSlice = (
               continue; // Move to next item
             }
          }
-         // If direct attempt also fails or no entry/mirror found initially
-         store.setWarningMessage(`Couldn't find the entry or mirror link for ${item.md5}`);
+         // If direct attempt also fails or no entry found initially
+         store.setWarningMessage(`Couldn't find the entry details for ${item.md5}`);
          store.onBulkQueueItemFail(i);
          continue;
       }
 
-      // --- FIX: Add explicit check before using entry.mirror ---
-      // This check might seem redundant due to the logic above, but it satisfies TypeScript's flow analysis
-      if (!entry || !entry.mirror) {
-          store.setWarningMessage(`Logic error: Entry or mirror link became invalid for ${item.md5}`);
+      // Now 'entry' is guaranteed to be defined. Check for 'entry.mirror'.
+      if (!entry.mirror) {
+          store.setWarningMessage(`Entry found for ${item.md5}, but no mirror link was parsed.`);
           store.onBulkQueueItemFail(i);
           continue;
       }
-      // --- END FIX ---
+      // --- END REFACTORED CHECK ---
 
-      // Proceed with mirror page if entry was found
-      const mirrorPageDocument = await attempt(() => getDocument(entry.mirror)); // Now safe to use entry.mirror
+
+      // Proceed with mirror page, 'entry' and 'entry.mirror' are now guaranteed to be defined
+      const mirrorPageDocument = await attempt(() => getDocument(entry!.mirror)); // Use non-null assertion (!) or rely on TS inferring from the check above
       if (!mirrorPageDocument) {
         store.setWarningMessage(`Couldn't fetch the mirror page for ${item.md5}`);
         store.onBulkQueueItemFail(i);
@@ -274,12 +274,12 @@ export const createBulkDownloadQueueStateSlice = (
           agent: httpAgent,
         })
       );
-       if (!downloadStream || !(downloadStream instanceof Response)) { // Check if it's a Response object
+       if (!downloadStream || !(downloadStream instanceof Response)) {
          store.setWarningMessage(`Couldn't get a valid download stream for ${item.md5}`);
          store.onBulkQueueItemFail(i);
          continue;
        }
-       if (!downloadStream.ok) { // Check HTTP status
+       if (!downloadStream.ok) {
           store.setWarningMessage(`Download request failed for ${item.md5} with status: ${downloadStream.status} ${downloadStream.statusText}`);
           store.onBulkQueueItemFail(i);
           continue;
@@ -308,7 +308,6 @@ export const createBulkDownloadQueueStateSlice = (
       isBulkDownloadComplete: true,
     });
 
-    // Only create file if there were successful downloads
     const completedMD5List = get()
       .bulkDownloadQueue.filter((item) => item.status === DownloadStatus.DOWNLOADED)
       .map((item) => item.md5);
@@ -328,7 +327,7 @@ export const createBulkDownloadQueueStateSlice = (
   },
 
   startBulkDownload: async () => {
-    const store = get(); // Use store consistently
+    const store = get();
     if (store.bulkDownloadSelectedEntries.length === 0) {
       store.setWarningMessage("Bulk download queue is empty");
       return;
@@ -342,7 +341,6 @@ export const createBulkDownloadQueueStateSlice = (
     });
     store.setActiveLayout(LAYOUT_KEY.BULK_DOWNLOAD_LAYOUT);
 
-    // Directly assign MD5 from entry ID and set status to IN_QUEUE (simpler if ID=MD5 assumption holds)
      set((prev) => ({
       bulkDownloadQueue: prev.bulkDownloadSelectedEntries.map((entry, index) => ({
         md5: entry.id, // Assuming ID is MD5
@@ -353,15 +351,13 @@ export const createBulkDownloadQueueStateSlice = (
       })),
     }));
 
-
-    await store.operateBulkDownloadQueue(); // Await the operation
+    await store.operateBulkDownloadQueue();
   },
 
   startBulkDownloadInCLI: async (md5List: string[]) => {
-    const store = get(); // Get store instance
+    const store = get();
 
     set({
-      // Initialize queue directly from MD5 list
       bulkDownloadQueue: md5List.map((md5) => ({
         md5,
         status: DownloadStatus.IN_QUEUE,
@@ -369,24 +365,22 @@ export const createBulkDownloadQueueStateSlice = (
         progress: 0,
         total: 0,
       })),
-      // Reset counters and flags for this run
       completedBulkDownloadItemCount: 0,
       failedBulkDownloadItemCount: 0,
       createdMD5ListFileName: "",
       isBulkDownloadComplete: false,
     });
 
-    await store.operateBulkDownloadQueue(); // Await the download process
+    await store.operateBulkDownloadQueue();
 
-    // Exit process only if in CLI mode after completion
     if (store.CLIMode) {
-        store.handleExit(); // Use the store's exit handler
+        store.handleExit();
     }
   },
 
   resetBulkDownloadQueue: () => {
     set({
-      ...initialBulkDownloadQueueState, // Reset all bulk download related state
+      ...initialBulkDownloadQueueState,
     });
   },
 });
