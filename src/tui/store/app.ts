@@ -5,9 +5,14 @@ import { ListItem } from "../../api/models/ListItem";
 import { constructListItems } from "../../utils";
 import { LAYOUT_KEY } from "../layouts/keys";
 import { clearScreen } from "../helpers/screen";
+import { SEARCH_MIN_CHAR } from "../../constants"; // Import constant
+
+// Added type for search section
+export type SearchSection = "fiction" | "scitech";
 
 export interface IAppState {
   CLIMode: boolean;
+  searchSection: SearchSection; // Added state
 
   isLoading: boolean;
   anyEntryExpanded: boolean;
@@ -15,7 +20,7 @@ export interface IAppState {
 
   loaderMessage: string;
   searchValue: string;
-  selectedSearchByOption: string | null;
+  selectedSearchByOption: string | null; // Note: This applies only to scitech
   errorMessage: string | null;
   warningMessage: string | null;
   warningTimeout: NodeJS.Timeout | null;
@@ -30,6 +35,7 @@ export interface IAppState {
   activeLayout: LAYOUT_KEY;
 
   setCLIMode: (CLIMode: boolean) => void;
+  setSearchSection: (section: SearchSection) => void; // Added action
 
   setIsLoading: (isLoading: boolean) => void;
   setAnyEntryExpanded: (anyEntryExpanded: boolean) => void;
@@ -52,13 +58,16 @@ export interface IAppState {
 }
 
 export const initialAppState = {
+  // CLIMode: false // This is set outside the initial state usually
+  searchSection: "fiction" as SearchSection, // Default to fiction
+
   isLoading: false,
   anyEntryExpanded: false,
-  showSearchMinCharWarning: true,
+  showSearchMinCharWarning: true, // Show warning initially if search value is empty
 
   loaderMessage: "",
   searchValue: "",
-  selectedSearchByOption: null,
+  selectedSearchByOption: null, // Default for scitech filter
   errorMessage: null,
   warningMessage: null,
   warningTimeout: null,
@@ -70,36 +79,41 @@ export const initialAppState = {
   detailedEntry: null,
   entries: [],
   listItems: [],
-  activeLayout: LAYOUT_KEY.SEARCH_LAYOUT,
+  activeLayout: LAYOUT_KEY.SEARCH_LAYOUT, // Default layout
 };
 
 export const createAppStateSlice = (
   set: SetState<TCombinedStore>,
   get: GetState<TCombinedStore>
-) => ({
-  CLIMode: false,
-  setCLIMode: (CLIMode: boolean) => set({ CLIMode }),
-
+): IAppState => ({ // Added return type annotation
+  CLIMode: false, // Default CLIMode here
   ...initialAppState,
+
+  setCLIMode: (CLIMode: boolean) => set({ CLIMode }),
+  setSearchSection: (section: SearchSection) => set({ searchSection: section }), // Added action implementation
 
   setIsLoading: (isLoading: boolean) => set({ isLoading }),
   setAnyEntryExpanded: (anyEntryExpanded: boolean) => set({ anyEntryExpanded }),
 
   setLoaderMessage: (loaderMessage: string) => set({ loaderMessage }),
   setSearchValue: (searchValue: string) => {
-    set(() => ({ showSearchMinCharWarning: searchValue.length < 3 }));
-    set({ searchValue });
+    set(() => ({
+        searchValue,
+        // Update warning based on current value and constant
+        showSearchMinCharWarning: searchValue.length < SEARCH_MIN_CHAR
+    }));
   },
   setSelectedSearchByOption: (selectedSearchByOption: string | null) => {
+    // This only makes sense for scitech, maybe add a check or handle in UI
     set({ selectedSearchByOption });
   },
   setErrorMessage: (errorMessage: string | null) => set({ errorMessage }),
   setWarningMessage: (warningMessage: string | null) => {
     const WARNING_DURATION = 5000;
 
-    const timeout = get().warningTimeout;
-    if (timeout) {
-      clearTimeout(timeout);
+    const currentTimeout = get().warningTimeout;
+    if (currentTimeout) {
+      clearTimeout(currentTimeout);
     }
 
     set({ warningMessage });
@@ -120,6 +134,7 @@ export const createAppStateSlice = (
     const listItems = constructListItems({
       entries,
       currentPage: store.currentPage,
+      // Check cache for next page availability *using the current search section*
       isNextPageAvailable: store.lookupPageCache(store.currentPage + 1).length > 0,
       handleSearchOption: store.backToSearch,
       handleNextPageOption: store.nextPage,
@@ -143,12 +158,15 @@ export const createAppStateSlice = (
   },
   setActiveLayout: (activeLayout: LAYOUT_KEY) => {
     const store = get();
+    // Conditionally clear screen only if not in CLI mode
     if (!store.CLIMode) {
       clearScreen();
     }
-
     set({ activeLayout });
   },
 
-  resetAppState: () => set(initialAppState),
+  resetAppState: () => {
+    const currentCLIMode = get().CLIMode; // Preserve CLI mode status
+    set({ ...initialAppState, CLIMode: currentCLIMode }); // Reset everything else
+  }
 });
