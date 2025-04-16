@@ -10,7 +10,7 @@ export const CONFIGURATION_URL =
 export const FAIL_REQ_ATTEMPT_COUNT = 5;
 export const FAIL_REQ_ATTEMPT_DELAY_MS = 2000;
 
-export const SEARCH_PAGE_SIZE = 25;
+export const SEARCH_PAGE_SIZE = 25; // <-- Make sure this is exported
 
 // https agent to bypass SSL rejection
 export const httpAgent = new https.Agent({
