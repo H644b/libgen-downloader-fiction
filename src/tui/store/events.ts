@@ -6,7 +6,7 @@ import { Entry } from "../../api/models/Entry";
 // Import BOTH parsing functions and the SearchSection type
 import { constructSearchURL, parseSciTechEntries, parseFictionEntries } from "../../api/data/search";
 import { SearchSection } from "../store/app"; // Adjust path if needed
-import { SEARCH_PAGE_SIZE, SEARCH_MIN_CHAR } from "../../settings"; // Import constants
+import { SEARCH_PAGE_SIZE, SEARCH_MIN_CHAR } from "../../constants"; // Corrected import path
 import { attempt } from "../../utils";
 import { getDocument } from "../../api/data/document";
 import { parseDownloadUrls } from "../../api/data/url";
@@ -22,7 +22,7 @@ export interface IEventActions {
 }
 
 export const createEventActionsSlice = (
-  set: SetState<TCombinedStore>, // Changed _set to set as it's used now
+  set: SetState<TCombinedStore>, // Use 'set'
   get: GetState<TCombinedStore>
 ): IEventActions => ({ // Added return type annotation
   backToSearch: () => {
@@ -124,10 +124,11 @@ export const createEventActionsSlice = (
     store.setIsLoading(false); // Turn off main loading state AFTER showing page 1
 
     // If page 1 had results, pre-fetch page 2 in the background
+    // Make sure to handle potential errors in background fetch gracefully
     if (entriesPage1.length > 0) {
         store.search(store.searchValue, 2).catch(e => {
             // Optionally log background fetch errors, but don't block UI
-            console.warn("Background fetch for page 2 failed:", e);
+            console.warn("Background fetch for page 2 failed:", e instanceof Error ? e.message : String(e));
         });
     }
   },
@@ -136,13 +137,13 @@ export const createEventActionsSlice = (
     const store = get();
     const nextPageNumber = store.currentPage + 1;
 
-    // No need to set global loading here, `search` handles its own temporary loading indicator if needed.
+    // Fetch next page (might hit cache or network)
     const entries = await store.search(store.searchValue, nextPageNumber);
 
     // If search returned an empty array (either no results or fetch/parse failure), show warning and don't update page.
     if (entries.length === 0) {
         // A warning might have already been set by `search`. We can add a more generic one if needed.
-        if (!store.warningMessage) { // Avoid overriding specific warnings
+        if (!store.warningMessage?.includes(`page ${nextPageNumber}`)) { // Avoid duplicate warnings
             store.setWarningMessage(`No results found on page ${nextPageNumber}.`);
         }
         return;
@@ -150,7 +151,7 @@ export const createEventActionsSlice = (
 
     // Pre-fetch page after next page in the background
     store.search(store.searchValue, nextPageNumber + 1).catch(e => {
-        console.warn(`Background fetch for page ${nextPageNumber + 1} failed:`, e);
+        console.warn(`Background fetch for page ${nextPageNumber + 1} failed:`, e instanceof Error ? e.message : String(e));
     });
 
     store.setCurrentPage(nextPageNumber);
@@ -167,20 +168,17 @@ export const createEventActionsSlice = (
       return; // Already on the first page
     }
 
-    // Fetch previous page (likely from cache, `search` handles loading indicator if needed)
+    // Fetch previous page (likely from cache)
     const entries = await store.search(store.searchValue, prevPageNumber);
 
-     // If search somehow failed (e.g., cache invalidation?), handle it
-    if (!entries) { // `search` now returns empty array on failure, so this check might not be needed if `entries.length === 0` is handled below
-         // Warning should be set by search function
-         return;
+    // `search` returns [] on failure now, so just check length
+    if (entries.length === 0 && prevPageNumber > 0) {
+        // Check if a warning was already set by search failure
+        if (!store.warningMessage?.includes(`page ${prevPageNumber}`)) {
+            store.setWarningMessage(`Could not retrieve results for page ${prevPageNumber}.`);
+        }
+       return;
     }
-    // We might still get an empty array if the cached page was empty or invalid
-    // if (entries.length === 0 && prevPageNumber > 0) {
-    //    store.setWarningMessage(`Could not retrieve results for page ${prevPageNumber}.`);
-    //    return;
-    // }
-
 
     store.setCurrentPage(prevPageNumber);
     store.setListItemsCursor(0);
