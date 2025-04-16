@@ -1,98 +1,85 @@
 import fs from "fs";
 import { getDocument } from "../api/data/document";
-// Remove 'Entry' from this import list
-import { constructMD5SearchUrl, parseSciTechEntries, parseFictionEntries } from "../api/data/search";
-import { Entry } from "../api/models/Entry"; // Import Entry directly from its definition if needed elsewhere
+import { constructMD5SearchUrl, parseSciTechEntries, parseFictionEntries, Entry } from "../api/data/search"; // Keep Entry type import
 import { findDownloadUrlFromMirror } from "../api/data/url";
 import renderTUI from "../tui/index";
 import { LAYOUT_KEY } from "../tui/layouts/keys";
 import { useBoundStore } from "../tui/store/index";
 import { attempt } from "../utils";
-// Import SEARCH_MIN_CHAR from the correct path (src/constants.ts)
 import { SEARCH_MIN_CHAR } from "../constants";
 
 // Helper to ensure config is loaded
 async function ensureConfigLoaded() {
     const store = useBoundStore.getState();
-    if (!store.mirror) { // Check if mirror is set (implies config is loaded)
+    if (!store.mirror) {
         console.log("Fetching config...");
         await store.fetchConfig();
         if (store.errorMessage) {
             console.error("Error fetching configuration:", store.errorMessage);
-            return false; // Indicate failure
+            return false;
         }
     }
-    return true; // Indicate success
+    return true;
 }
 
 
 export const operate = async (flags: Record<string, unknown>) => {
   const store = useBoundStore.getState();
+  const baseMirror = store.mirror; // Get base mirror URL once if needed
 
-  // Set search section based on flag BEFORE potentially fetching config or rendering TUI
   if (flags.scitech) {
     store.setSearchSection("scitech");
   }
-  // Default is 'fiction' (set in initialAppState)
 
-  // --- Search Operation (-s) ---
   if (flags.search) {
     const query = flags.search as string;
-    if (query.length < SEARCH_MIN_CHAR) { // Uses the correctly imported constant
+    if (query.length < SEARCH_MIN_CHAR) {
       console.log(`Query must be at least ${SEARCH_MIN_CHAR} characters long`);
       return;
     }
-
     const configLoaded = await ensureConfigLoaded();
     if (!configLoaded) return;
-
     store.setSearchValue(query);
     renderTUI({
       startInCLIMode: false,
-      doNotFetchConfigInitially: true, // Config should be loaded now
+      doNotFetchConfigInitially: true,
     });
-    // handleSearchSubmit uses the searchSection state internally
     await store.handleSearchSubmit();
     return;
   }
 
-  // --- Bulk Download Operation (-b) ---
   if (flags.bulk) {
     const configLoaded = await ensureConfigLoaded();
     if (!configLoaded) return;
-
     const filePath = flags.bulk as string;
     try {
         const data = await fs.promises.readFile(filePath, "utf8");
-        const md5List = data.split(/\r?\n/) // Handles both Windows and Unix line endings
+        const md5List = data.split(/\r?\n/)
                              .map(line => line.trim())
-                             .filter(line => /^[a-fA-F0-9]{32}$/.test(line)); // Validate MD5 format
-
+                             .filter(line => /^[a-fA-F0-9]{32}$/.test(line));
         if (md5List.length === 0) {
             console.error(`Bulk file "${filePath}" is empty or contains no valid 32-char hex MD5 hashes.`);
             return;
         }
-
         renderTUI({
           startInCLIMode: true,
-          doNotFetchConfigInitially: true, // Config loaded
+          doNotFetchConfigInitially: true,
           initialLayout: LAYOUT_KEY.BULK_DOWNLOAD_LAYOUT,
         });
-        // Bulk download uses MD5 lookups, assumes MD5 pattern works for both sections
         await store.startBulkDownloadInCLI(md5List);
-
-    } catch (err: any) { // Catch readFile errors
+    } catch (err: any) {
         console.error(`Error reading bulk file "${filePath}":`, err.message);
         return;
     }
     return;
   }
 
-  // --- Get URL Operation (-u) ---
   if (flags.url) {
     const configLoaded = await ensureConfigLoaded();
-    if (!configLoaded) return;
-
+    if (!configLoaded || !store.mirror) { // Ensure mirror is available after config load
+        console.error("Cannot get URL: LibGen mirror configuration is missing or invalid.");
+        return;
+    }
     const md5 = flags.url as string;
     if (!/^[a-fA-F0-9]{32}$/.test(md5)) {
         console.error("Invalid MD5 hash provided for --url flag.");
@@ -109,35 +96,33 @@ export const operate = async (flags: Record<string, unknown>) => {
     }
 
     // Try parsing as Sci-Tech first, then Fiction if that fails
-    // The type of 'entry' will be inferred as `Entry | undefined`
-    let entry = parseSciTechEntries(searchPageDocument)?.[0];
+    let entry: Entry | undefined = parseSciTechEntries(searchPageDocument)?.[0];
     if (!entry) {
-        entry = parseFictionEntries(searchPageDocument)?.[0];
+        // --- FIX: Pass baseMirror (which is store.mirror) to parseFictionEntries ---
+        entry = parseFictionEntries(searchPageDocument, store.mirror, console.error)?.[0]; // Pass mirror and basic logger
+        // --- END FIX ---
     }
 
-    // Refactored check
+    // Refactored Check
     if (!entry) {
         console.log("Could not parse standard entry format, attempting direct mirror check...");
         const directDownloadUrl = findDownloadUrlFromMirror(searchPageDocument);
         if (directDownloadUrl) {
              console.log("Found direct download link:", directDownloadUrl);
-             return; // Success!
+             return;
         }
         console.log(`Failed to parse entry details for MD5 ${md5}.`);
-        return; // Failure
+        return;
     }
 
-    // Now 'entry' is guaranteed to be defined. Check for 'entry.mirror'.
     if (!entry.mirror) {
         console.log(`Entry found for ${md5}, but no mirror link was parsed.`);
-        return; // Failure
+        return;
     }
-    // End refactored check
+    // End Refactored Check
 
-    // If entry and mirror link were found
     console.log(`Found entry: "${entry.title}", accessing mirror page: ${entry.mirror}`);
-    // Safe to use entry.mirror here
-    const mirrorPageDocument = await attempt(() => getDocument(entry!.mirror)); // Can use non-null assertion or rely on TS inference
+    const mirrorPageDocument = await attempt(() => getDocument(entry!.mirror));
     if (!mirrorPageDocument) {
       console.log(`Failed to get mirror page document from ${entry.mirror}`);
       return;
@@ -153,31 +138,26 @@ export const operate = async (flags: Record<string, unknown>) => {
     return;
   }
 
-  // --- Download Operation (-d) ---
   if (flags.download) {
     const configLoaded = await ensureConfigLoaded();
     if (!configLoaded) return;
-
     const md5 = flags.download as string;
      if (!/^[a-fA-F0-9]{32}$/.test(md5)) {
         console.error("Invalid MD5 hash provided for --download flag.");
         return;
     }
-
     const md5List = [md5];
     renderTUI({
       startInCLIMode: true,
-      doNotFetchConfigInitially: true, // Config loaded
+      doNotFetchConfigInitially: true,
       initialLayout: LAYOUT_KEY.BULK_DOWNLOAD_LAYOUT,
     });
-    await store.startBulkDownloadInCLI(md5List); // Uses MD5 lookup, same logic as bulk
+    await store.startBulkDownloadInCLI(md5List);
     return;
   }
 
-  // --- Default Interactive Mode ---
-  // Config will be fetched here if not already loaded by other flags
   renderTUI({
     startInCLIMode: false,
-    doNotFetchConfigInitially: !!store.mirror, // Only skip if config already loaded
+    doNotFetchConfigInitially: !!store.mirror,
   });
 };
